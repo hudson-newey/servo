@@ -1,0 +1,36 @@
+{
+	"image": "debian",
+	"features": {
+		"ghcr.io/devcontainers/features/azure-cli:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers/features/python:1": {
+			"version": "latest"
+		},
+		"ghcr.io/devcontainers-contrib/features/curl-apt-get:1": {
+			"version": "latest"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"streetsidesoftware.code-spell-checker",
+				"serayuzgur.crates",
+				"rust-lang.rust-analyzer",
+				"dustypomerleau.rust-syntax",
+				"editorconfig.editorconfig",
+				"davidanson.vscode-markdownlint",
+				"esbenp.prettier-vscode",
+				"ms-python.python",
+				// taken from the .vscode/extensions.json file
+				"NathanRidley.autotrim",
+				"dbaeumer.vscode-eslint",
+				"ms-vscode.cpptools",
+				"rust-lang.rust-analyzer",
+				"ecmel.vscode-html-css",
+				"mythmon.idl",
+				"tamasfe.even-better-toml"
+			]
+		}
+	}
+}

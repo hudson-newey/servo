@@ -55,6 +55,7 @@ pub enum MinibrowserEvent {
     Go,
     Back,
     Forward,
+    Reload,
 }
 
 impl Minibrowser {
@@ -155,21 +156,21 @@ impl Minibrowser {
                     ui.available_size(),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        if ui.button("back").clicked() {
+                        if ui.button("<").clicked() {
                             event_queue.borrow_mut().push(MinibrowserEvent::Back);
                         }
-                        if ui.button("forward").clicked() {
+                        if ui.button(">").clicked() {
                             event_queue.borrow_mut().push(MinibrowserEvent::Forward);
+                        }
+                        if ui.button("↻").clicked() {
+                            event_queue.borrow_mut().push(MinibrowserEvent::Reload);
+                            // TODO: find out what this does
+                            // location_dirty.set(false);
                         }
                         ui.allocate_ui_with_layout(
                             ui.available_size(),
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
-                                if ui.button("go").clicked() {
-                                    event_queue.borrow_mut().push(MinibrowserEvent::Go);
-                                    location_dirty.set(false);
-                                }
-
                                 match self.load_status {
                                     LoadStatus::LoadStart => {
                                         ui.add(Spinner::new().color(Color32::GRAY));
@@ -335,6 +336,10 @@ impl Minibrowser {
                         browser_id,
                         TraversalDirection::Forward(1),
                     ));
+                },
+                MinibrowserEvent::Reload => {
+                    let browser_id = browser.webview_id().unwrap();
+                    app_event_queue.push(EmbedderEvent::Reload(browser_id));
                 },
             }
         }
