@@ -49,8 +49,9 @@ use parking_lot::Mutex as ParkMutex;
 use profile_traits::ipc as ProfiledIpc;
 use profile_traits::mem::ProfilerChan as MemProfilerChan;
 use profile_traits::time::ProfilerChan as TimeProfilerChan;
-use script_layout_interface::message::{Msg, QueryMsg, Reflow, ReflowGoal, ScriptReflow};
-use script_layout_interface::{Layout, PendingImageState, TrustedNodeAddress};
+use script_layout_interface::{
+    Layout, PendingImageState, QueryMsg, Reflow, ReflowGoal, ScriptReflow, TrustedNodeAddress,
+};
 use script_traits::webdriver_msg::{WebDriverJSError, WebDriverJSResult};
 use script_traits::{
     ConstellationControlMsg, DocumentState, HistoryEntryReplacement, LoadData, ScriptMsg,
@@ -1875,7 +1876,7 @@ impl Window {
             animations: document.animations().sets.clone(),
         };
 
-        let _ = self.with_layout(move |layout| layout.process(Msg::Reflow(reflow)));
+        let _ = self.with_layout(move |layout| layout.reflow(reflow));
 
         let complete = match join_port.try_recv() {
             Err(TryRecvError::Empty) => {
@@ -1910,7 +1911,7 @@ impl Window {
 
             let mut images = self.pending_layout_images.borrow_mut();
             let nodes = images.entry(id).or_default();
-            if !nodes.iter().any(|n| &**n as *const _ == &*node as *const _) {
+            if !nodes.iter().any(|n| std::ptr::eq(&**n, &*node)) {
                 let (responder, responder_listener) =
                     ProfiledIpc::channel(self.global().time_profiler_chan().clone()).unwrap();
                 let image_cache_chan = self.image_cache_chan.clone();

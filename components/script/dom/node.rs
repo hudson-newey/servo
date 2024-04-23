@@ -24,9 +24,8 @@ use libc::{self, c_void, uintptr_t};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image::base::{Image, ImageMetadata};
-use script_layout_interface::message::QueryMsg;
 use script_layout_interface::{
-    GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType,
+    GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType, QueryMsg,
     SVGSVGData, StyleData, TrustedNodeAddress,
 };
 use script_traits::{DocumentActivity, UntrustedNodeAddress};
@@ -1330,8 +1329,6 @@ pub trait LayoutNodeHelpers<'dom> {
     unsafe fn get_flag(self, flag: NodeFlags) -> bool;
     unsafe fn set_flag(self, flag: NodeFlags, value: bool);
 
-    fn children_count(self) -> u32;
-
     fn style_data(self) -> Option<&'dom StyleData>;
     fn layout_data(self) -> Option<&'dom GenericLayoutData>;
 
@@ -1472,11 +1469,6 @@ impl<'dom> LayoutNodeHelpers<'dom> for LayoutDom<'dom, Node> {
         }
 
         (this).flags.set(flags);
-    }
-
-    #[inline]
-    fn children_count(self) -> u32 {
-        self.unsafe_get().children_count.get()
     }
 
     // FIXME(nox): How we handle style and layout data needs to be completely
@@ -3455,7 +3447,7 @@ impl UniqueId {
             if (*ptr).is_none() {
                 *ptr = Some(Box::new(Uuid::new_v4()));
             }
-            (&*ptr).as_ref().unwrap()
+            (*ptr).as_ref().unwrap()
         }
     }
 }

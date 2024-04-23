@@ -9,7 +9,7 @@ use std::rc::Rc;
 use dom_struct::dom_struct;
 use html5ever::{local_name, namespace_url, ns, LocalName, Prefix};
 use js::rust::HandleObject;
-use script_layout_interface::message::QueryMsg;
+use script_layout_interface::QueryMsg;
 use style::attr::AttrValue;
 use style_traits::dom::ElementState;
 
@@ -954,7 +954,7 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn bind_to_tree(&self, context: &BindContext) {
-        if let Some(ref super_type) = self.super_type() {
+        if let Some(super_type) = self.super_type() {
             super_type.bind_to_tree(context);
         }
         let element = self.as_element();
@@ -975,7 +975,7 @@ impl VirtualMethods for HTMLElement {
     }
 
     fn unbind_from_tree(&self, context: &UnbindContext) {
-        if let Some(ref super_type) = self.super_type() {
+        if let Some(super_type) = self.super_type() {
             super_type.unbind_from_tree(context);
         }
 
