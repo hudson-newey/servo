@@ -48,7 +48,7 @@ gstreamer-gl-wayland = { version = "0.22" }
 gstreamer-sys = "0.22"
 gstreamer-video = "0.22"
 headers = "0.3"
-html5ever = "0.26"
+html5ever = "0.27"
 http = "0.2"
 hyper = "0.14"
 hyper-rustls = { version = "0.24", default-features = false, features = ["acceptor", "http1", "http2", "logging", "tls12", "webpki-tokio"] }
@@ -64,7 +64,7 @@ keyboard-types = "0.6"
 lazy_static = "1.4"
 libc = "0.2"
 log = "0.4"
-malloc_size_of = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
+malloc_size_of = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
 malloc_size_of_derive = "0.1"
 mime = "0.3.13"
 mime_guess = "2.0.3"
@@ -83,35 +83,35 @@ rand_core = "0.6"
 rand_isaac = "0.3"
 rayon = "1"
 regex = "1.10"
-rustls = { version = "0.21.11", features = ["dangerous_configuration"] }
+rustls = { version = "0.21.12", features = ["dangerous_configuration"] }
 rustls-pemfile = "1.0.4"
 script_layout_interface = { path = "components/shared/script_layout" }
 script_traits = { path = "components/shared/script" }
-selectors = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
+selectors = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
 serde = "1.0.198"
 serde_bytes = "0.11"
 serde_json = "1.0"
 servo-media = { git = "https://github.com/servo/media" }
 servo-media-dummy = { git = "https://github.com/servo/media" }
 servo-media-gstreamer = { git = "https://github.com/servo/media" }
-servo_arc = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-servo_atoms = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-size_of_test = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
+servo_arc = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+servo_atoms = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+size_of_test = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
 smallbitvec = "2.5.3"
 smallvec = "1.13"
 sparkle = "0.1.26"
 string_cache = "0.8"
 string_cache_codegen = "0.5"
-style = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
-style_config = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
-style_traits = { git = "https://github.com/servo/stylo", branch = "2024-03-01", features = ["servo"] }
+style = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
+style_config = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
+style_traits = { git = "https://github.com/servo/stylo", branch = "2024-04-16", features = ["servo"] }
 # NOTE: the sm-angle feature only 2024-03-01rms!
 surfman = { version = "0.9", features = ["chains", "sm-angle", "sm-angle-default"] }
 syn = { version = "2", default-features = false, features = ["clone-impls", "derive", "parsing"] }
 synstructure = "0.13"
 thin-vec = "0.2.13"
 time = "0.1.41"
-to_shmem = { git = "https://github.com/servo/stylo", branch = "2024-03-01" }
+to_shmem = { git = "https://github.com/servo/stylo", branch = "2024-04-16" }
 tokio = "1"
 tokio-rustls = "0.24"
 tungstenite = "0.20"
@@ -126,11 +126,11 @@ webpki-roots = "0.25"
 webrender = { git = "https://github.com/servo/webrender", branch = "0.64", features = ["capture"] }
 webrender_api = { git = "https://github.com/servo/webrender", branch = "0.64" }
 webrender_traits = { path = "components/shared/webrender" }
-wgpu-core = "0.18"
-wgpu-types = "0.18"
+wgpu-core = { git = "https://github.com/gfx-rs/wgpu", rev = "32e70bc1635905c508d408eb1cf22b2aa062ffe1" }
+wgpu-types = { git = "https://github.com/gfx-rs/wgpu", rev = "32e70bc1635905c508d408eb1cf22b2aa062ffe1" }
 winapi = "0.3"
 xi-unicode = "0.1.0"
-xml5ever = "0.17"
+xml5ever = "0.18"
 
 [profile.release]
 opt-level = 3
