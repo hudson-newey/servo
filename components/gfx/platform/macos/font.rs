@@ -19,11 +19,12 @@ use core_text::font_descriptor::{
 };
 use log::debug;
 use style::values::computed::font::{FontStretch, FontStyle, FontWeight};
+use webrender_api::FontInstanceFlags;
 
 use super::core_text_font_cache::CoreTextFontCache;
 use crate::font::{
     map_platform_values_to_style_values, FontMetrics, FontTableMethods, FontTableTag,
-    FractionalPixel, PlatformFontMethods, GPOS, GSUB, KERN,
+    FractionalPixel, PlatformFontMethods, CBDT, COLR, GPOS, GSUB, KERN, SBIX,
 };
 use crate::font_cache_thread::FontIdentifier;
 use crate::font_template::FontTemplateDescriptor;
@@ -61,6 +62,17 @@ pub struct PlatformFont {
     h_kern_subtable: Option<CachedKernTable>,
     can_do_fast_shaping: bool,
 }
+
+// From https://developer.apple.com/documentation/coretext:
+// > All individual functions in Core Text are thread-safe. Font objects (CTFont,
+// > CTFontDescriptor, and associated objects) can be used simultaneously by multiple
+// > operations, work queues, or threads. However, the layout objects (CTTypesetter,
+// > CTFramesetter, CTRun, CTLine, CTFrame, and associated objects) should be used in a
+// > single operation, work queue, or thread.
+//
+// The other element is a read-only CachedKernTable which is stored in a CFData.
+unsafe impl Sync for PlatformFont {}
+unsafe impl Send for PlatformFont {}
 
 impl PlatformFont {
     /// Cache all the data needed for basic horizontal kerning. This is used only as a fallback or
@@ -258,11 +270,15 @@ impl PlatformFontMethods for PlatformFont {
         let line_gap = (ascent + descent + leading + 0.5).floor();
 
         let max_advance = Au::from_f64_px(self.ctfont.bounding_box().size.width);
-        let average_advance = self
+        let zero_horizontal_advance = self
             .glyph_index('0')
             .and_then(|idx| self.glyph_h_advance(idx))
-            .map(Au::from_f64_px)
-            .unwrap_or(max_advance);
+            .map(Au::from_f64_px);
+        let ic_horizontal_advance = self
+            .glyph_index('\u{6C34}')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+        let average_advance = zero_horizontal_advance.unwrap_or(max_advance);
 
         let metrics = FontMetrics {
             underline_size: Au::from_f64_au(underline_thickness),
@@ -285,6 +301,8 @@ impl PlatformFontMethods for PlatformFont {
             max_advance,
             average_advance,
             line_gap: Au::from_f64_px(line_gap),
+            zero_horizontal_advance,
+            ic_horizontal_advance,
         };
         debug!(
             "Font metrics (@{} pt): {:?}",
@@ -297,6 +315,18 @@ impl PlatformFontMethods for PlatformFont {
     fn table_for_tag(&self, tag: FontTableTag) -> Option<FontTable> {
         let result: Option<CFData> = self.ctfont.get_font_table(tag);
         result.map(FontTable::wrap)
+    }
+
+    /// Get the necessary [`FontInstanceFlags`]` for this font.
+    fn webrender_font_instance_flags(&self) -> FontInstanceFlags {
+        // TODO: Should this also validate these tables?
+        if self.table_for_tag(COLR).is_some() ||
+            self.table_for_tag(CBDT).is_some() ||
+            self.table_for_tag(SBIX).is_some()
+        {
+            return FontInstanceFlags::EMBEDDED_BITMAPS;
+        }
+        FontInstanceFlags::empty()
     }
 }
 

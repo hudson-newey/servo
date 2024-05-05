@@ -47,9 +47,9 @@ use webrender_api::units::{
 };
 use webrender_api::{
     self, BuiltDisplayList, DirtyRect, DisplayListPayload, DocumentId, Epoch as WebRenderEpoch,
-    ExternalScrollId, HitTestFlags, PipelineId as WebRenderPipelineId, PropertyBinding,
-    ReferenceFrameKind, RenderReasons, SampledScrollOffset, ScrollLocation, SpaceAndClipInfo,
-    SpatialId, SpatialTreeItemKey, TransformStyle,
+    ExternalScrollId, FontInstanceOptions, HitTestFlags, PipelineId as WebRenderPipelineId,
+    PropertyBinding, ReferenceFrameKind, RenderReasons, SampledScrollOffset, ScrollLocation,
+    SpaceAndClipInfo, SpatialId, SpatialTreeItemKey, TransformStyle,
 };
 
 use crate::gl::RenderTargetInfo;
@@ -871,13 +871,27 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
             ForwardedToCompositorMsg::Font(FontToCompositorMsg::AddFontInstance(
                 font_key,
                 size,
+                flags,
                 sender,
             )) => {
                 let key = self.webrender_api.generate_font_instance_key();
-                let mut txn = Transaction::new();
-                txn.add_font_instance(key, font_key, size, None, None, Vec::new());
+                let mut transaction = Transaction::new();
+
+                let font_instance_options = FontInstanceOptions {
+                    flags,
+                    ..Default::default()
+                };
+                transaction.add_font_instance(
+                    key,
+                    font_key,
+                    size,
+                    Some(font_instance_options),
+                    None,
+                    Vec::new(),
+                );
+
                 self.webrender_api
-                    .send_transaction(self.webrender_document, txn);
+                    .send_transaction(self.webrender_document, transaction);
                 let _ = sender.send(key);
             },
 
@@ -951,7 +965,7 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
                 let _ = sender.send(());
             },
             CompositorMsg::Forwarded(ForwardedToCompositorMsg::Font(
-                FontToCompositorMsg::AddFontInstance(_, _, sender),
+                FontToCompositorMsg::AddFontInstance(_, _, _, sender),
             )) => {
                 let _ = sender.send(self.webrender_api.generate_font_instance_key());
             },
@@ -1416,6 +1430,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
     }
 
     pub fn on_mouse_window_event_class(&mut self, mouse_window_event: MouseWindowEvent) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         if self.convert_mouse_to_touch {
             match mouse_window_event {
                 MouseWindowEvent::Click(_, _) => {},
@@ -1513,6 +1531,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
     }
 
     pub fn on_mouse_window_move_event_class(&mut self, cursor: DevicePoint) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         if self.convert_mouse_to_touch {
             self.on_touch_move(TouchId(0), cursor);
             return;
@@ -1571,6 +1593,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
         identifier: TouchId,
         location: DevicePoint,
     ) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         match event_type {
             TouchEventType::Down => self.on_touch_down(identifier, location),
             TouchEventType::Move => self.on_touch_move(identifier, location),
@@ -1638,6 +1664,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
     }
 
     pub fn on_wheel_event(&mut self, delta: WheelDelta, p: DevicePoint) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         self.send_wheel_event(delta, p);
     }
 
@@ -1647,6 +1677,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
         cursor: DeviceIntPoint,
         phase: TouchEventType,
     ) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         match phase {
             TouchEventType::Move => self.on_scroll_window_event(scroll_location, cursor),
             TouchEventType::Up | TouchEventType::Cancel => {
@@ -1860,11 +1894,19 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
     }
 
     pub fn on_zoom_reset_window_event(&mut self) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         self.page_zoom = Scale::new(1.0);
         self.update_after_zoom_or_hidpi_change();
     }
 
     pub fn on_zoom_window_event(&mut self, magnification: f32) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         self.page_zoom = Scale::new(
             (self.page_zoom.get() * magnification)
                 .max(MIN_ZOOM)
@@ -1887,6 +1929,10 @@ impl<Window: WindowMethods + ?Sized> IOCompositor<Window> {
 
     /// Simulate a pinch zoom
     pub fn on_pinch_zoom_window_event(&mut self, magnification: f32) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            return;
+        }
+
         // TODO: Scroll to keep the center in view?
         self.pending_scroll_zoom_events
             .push(ScrollZoomEvent::PinchZoom(magnification));

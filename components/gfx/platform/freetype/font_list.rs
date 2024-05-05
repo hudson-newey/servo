@@ -24,6 +24,7 @@ use fontconfig_sys::{
 };
 use libc::{c_char, c_int};
 use log::debug;
+use malloc_size_of_derive::MallocSizeOf;
 use serde::{Deserialize, Serialize};
 use style::values::computed::{FontStretch, FontStyle, FontWeight};
 use style::Atom;
@@ -34,7 +35,7 @@ use crate::font_template::{FontTemplate, FontTemplateDescriptor};
 use crate::text::util::is_cjk;
 
 /// An identifier for a local font on systems using Freetype.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub struct LocalFontIdentifier {
     /// The path to the font.
     pub path: Atom,
@@ -268,9 +269,9 @@ fn font_weight_from_fontconfig_pattern(pattern: *mut FcPattern) -> Option<FontWe
 
     let mapping = [
         (0., 0.),
-        (FC_WEIGHT_REGULAR as f64, 400 as f64),
-        (FC_WEIGHT_BOLD as f64, 700 as f64),
-        (FC_WEIGHT_EXTRABLACK as f64, 1000 as f64),
+        (FC_WEIGHT_REGULAR as f64, 400_f64),
+        (FC_WEIGHT_BOLD as f64, 700_f64),
+        (FC_WEIGHT_EXTRABLACK as f64, 1000_f64),
     ];
 
     let mapped_weight = map_platform_values_to_style_values(&mapping, weight as f64);

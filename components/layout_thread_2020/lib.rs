@@ -22,7 +22,7 @@ use euclid::{Point2D, Scale, Size2D, Vector2D};
 use fnv::FnvHashMap;
 use fxhash::FxHashMap;
 use gfx::font_cache_thread::FontCacheThread;
-use gfx::font_context;
+use gfx::font_context::FontContext;
 use gfx_traits::{node_id_from_scroll_id, Epoch};
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
@@ -41,8 +41,8 @@ use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use metrics::{PaintTimeMetrics, ProfilerMetadataFactory};
 use msg::constellation_msg::{BrowsingContextId, PipelineId};
 use net_traits::image_cache::{ImageCache, UsePlaceholder};
-use parking_lot::{ReentrantMutex, RwLock};
-use profile_traits::mem::{Report, ReportKind, ReportsChan};
+use parking_lot::RwLock;
+use profile_traits::mem::{Report, ReportKind};
 use profile_traits::path;
 use profile_traits::time::{
     self as profile_time, profile, TimerMetadata, TimerMetadataFrameType, TimerMetadataReflowType,
@@ -121,7 +121,10 @@ pub struct LayoutThread {
 
     /// Public interface to the font cache thread. This needs to be behind a [`ReentrantMutex`],
     /// because some font cache operations can trigger others.
-    font_cache_thread: Arc<ReentrantMutex<FontCacheThread>>,
+    font_cache_thread: FontCacheThread,
+
+    /// A FontContext to be used during layout.
+    font_context: Arc<FontContext<FontCacheThread>>,
 
     /// Is this the first reflow in this LayoutThread?
     first_reflow: Cell<bool>,
@@ -417,13 +420,12 @@ impl Layout for LayoutThread {
 
     fn exit_now(&mut self) {}
 
-    fn collect_reports(&self, reports_chan: ReportsChan) {
-        let mut reports = vec![];
+    fn collect_reports(&self, reports: &mut Vec<Report>) {
         // Servo uses vanilla jemalloc, which doesn't have a
         // malloc_enclosing_size_of function.
         let mut ops = MallocSizeOfOps::new(servo_allocator::usable_size, None, None);
 
-        // FIXME(njn): Just measuring the display tree for now.
+        // TODO: Measure more than just display list, stylist, and font context.
         let formatted_url = &format!("url({})", self.url);
         reports.push(Report {
             path: path![formatted_url, "layout-thread", "display-list"],
@@ -437,7 +439,11 @@ impl Layout for LayoutThread {
             size: self.stylist.size_of(&mut ops),
         });
 
-        reports_chan.send(reports);
+        reports.push(Report {
+            path: path![formatted_url, "layout-thread", "font-context"],
+            kind: ReportKind::ExplicitJemallocHeapSize,
+            size: self.font_context.size_of(&mut ops),
+        });
     }
 
     fn set_quirks_mode(&mut self, quirks_mode: QuirksMode) {
@@ -487,13 +493,13 @@ impl LayoutThread {
 
         // The device pixel ratio is incorrect (it does not have the hidpi value),
         // but it will be set correctly when the initial reflow takes place.
-        let font_cache_thread = Arc::new(ReentrantMutex::new(font_cache_thread));
+        let font_context = Arc::new(FontContext::new(font_cache_thread.clone()));
         let device = Device::new(
             MediaType::screen(),
             QuirksMode::NoQuirks,
             window_size.initial_viewport,
             window_size.device_pixel_ratio,
-            Box::new(LayoutFontMetricsProvider(font_cache_thread.clone())),
+            Box::new(LayoutFontMetricsProvider(font_context.clone())),
         );
 
         // Ask the router to proxy IPC messages from the font cache thread to layout.
@@ -517,6 +523,7 @@ impl LayoutThread {
             registered_painters: RegisteredPaintersImpl(Default::default()),
             image_cache,
             font_cache_thread,
+            font_context,
             first_reflow: Cell::new(true),
             font_cache_sender: ipc_font_cache_sender,
             generation: Cell::new(0),
@@ -587,7 +594,7 @@ impl LayoutThread {
                 traversal_flags,
             ),
             image_cache: self.image_cache.clone(),
-            font_cache_thread: self.font_cache_thread.clone(),
+            font_context: self.font_context.clone(),
             webrender_image_cache: self.webrender_image_cache.clone(),
             pending_images: Mutex::new(vec![]),
             use_rayon,
@@ -619,10 +626,8 @@ impl LayoutThread {
         // Find all font-face rules and notify the font cache of them.
         // GWTODO: Need to handle unloading web fonts.
         if stylesheet.is_effective_for_device(self.stylist.device(), guard) {
-            let newly_loading_font_count = self
-                .font_cache_thread
-                .lock()
-                .add_all_web_fonts_from_stylesheet(
+            let newly_loading_font_count =
+                self.font_cache_thread.add_all_web_fonts_from_stylesheet(
                     stylesheet,
                     guard,
                     self.stylist.device(),
@@ -640,7 +645,7 @@ impl LayoutThread {
     }
 
     fn handle_web_font_loaded(&self) {
-        font_context::invalidate_font_caches();
+        self.font_context.invalidate_caches();
         self.script_chan
             .send(ConstellationControlMsg::WebFontLoaded(self.id))
             .unwrap();
@@ -1079,7 +1084,7 @@ impl LayoutThread {
             self.stylist.quirks_mode(),
             window_size_data.initial_viewport,
             window_size_data.device_pixel_ratio,
-            Box::new(LayoutFontMetricsProvider(self.font_cache_thread.clone())),
+            Box::new(LayoutFontMetricsProvider(self.font_context.clone())),
         );
 
         // Preserve any previously computed root font size.
@@ -1238,7 +1243,7 @@ impl RegisteredSpeculativePainters for RegisteredPaintersImpl {
 }
 
 #[derive(Debug)]
-struct LayoutFontMetricsProvider(Arc<ReentrantMutex<FontCacheThread>>);
+struct LayoutFontMetricsProvider(Arc<FontContext<FontCacheThread>>);
 
 impl FontMetricsProvider for LayoutFontMetricsProvider {
     fn query_font_metrics(
@@ -1249,31 +1254,55 @@ impl FontMetricsProvider for LayoutFontMetricsProvider {
         _in_media_query: bool,
         _retrieve_math_scales: bool,
     ) -> FontMetrics {
-        layout::context::with_thread_local_font_context(&self.0, move |font_context| {
-            let Some(servo_metrics) = font_context
-                .font_group_with_size(ServoArc::new(font.clone()), base_size.into())
-                .borrow_mut()
-                .first(font_context)
-                .map(|font| font.borrow().metrics.clone())
-            else {
-                return Default::default();
-            };
+        let font_context = &self.0;
+        let font_group = self
+            .0
+            .font_group_with_size(ServoArc::new(font.clone()), base_size.into());
 
-            // Only use the x-height of this font if it is non-zero. Some fonts return
-            // inaccurate metrics, which shouldn't be used.
-            let x_height = Some(servo_metrics.x_height)
-                .filter(|x_height| !x_height.is_zero())
-                .map(CSSPixelLength::from);
+        let Some(first_font_metrics) = font_group
+            .write()
+            .first(font_context)
+            .map(|font| font.metrics.clone())
+        else {
+            return Default::default();
+        };
 
-            FontMetrics {
-                x_height,
-                zero_advance_measure: None,
-                cap_height: None,
-                ic_width: None,
-                ascent: servo_metrics.ascent.into(),
-                script_percent_scale_down: None,
-                script_script_percent_scale_down: None,
-            }
-        })
+        // Only use the x-height of this font if it is non-zero. Some fonts return
+        // inaccurate metrics, which shouldn't be used.
+        let x_height = Some(first_font_metrics.x_height)
+            .filter(|x_height| !x_height.is_zero())
+            .map(CSSPixelLength::from);
+
+        let zero_advance_measure = first_font_metrics
+            .zero_horizontal_advance
+            .or_else(|| {
+                font_group
+                    .write()
+                    .find_by_codepoint(font_context, '0')?
+                    .metrics
+                    .zero_horizontal_advance
+            })
+            .map(CSSPixelLength::from);
+
+        let ic_width = first_font_metrics
+            .ic_horizontal_advance
+            .or_else(|| {
+                font_group
+                    .write()
+                    .find_by_codepoint(font_context, '\u{6C34}')?
+                    .metrics
+                    .ic_horizontal_advance
+            })
+            .map(CSSPixelLength::from);
+
+        FontMetrics {
+            x_height,
+            zero_advance_measure,
+            cap_height: None,
+            ic_width,
+            ascent: first_font_metrics.ascent.into(),
+            script_percent_scale_down: None,
+            script_script_percent_scale_down: None,
+        }
     }
 }

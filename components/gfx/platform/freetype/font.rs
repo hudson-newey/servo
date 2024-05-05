@@ -9,17 +9,19 @@ use std::{mem, ptr};
 
 use app_units::Au;
 use freetype::freetype::{
-    FT_Done_Face, FT_F26Dot6, FT_Face, FT_FaceRec, FT_Get_Char_Index, FT_Get_Kerning,
-    FT_Get_Sfnt_Table, FT_GlyphSlot, FT_Int32, FT_Kerning_Mode, FT_Load_Glyph, FT_Load_Sfnt_Table,
-    FT_Long, FT_New_Memory_Face, FT_Set_Char_Size, FT_Sfnt_Tag, FT_SizeRec, FT_Size_Metrics,
-    FT_UInt, FT_ULong, FT_Vector, FT_STYLE_FLAG_ITALIC,
+    FT_Done_Face, FT_F26Dot6, FT_Face, FT_Get_Char_Index, FT_Get_Kerning, FT_Get_Sfnt_Table,
+    FT_GlyphSlot, FT_Int32, FT_Kerning_Mode, FT_Load_Glyph, FT_Load_Sfnt_Table, FT_Long,
+    FT_New_Memory_Face, FT_Set_Char_Size, FT_Sfnt_Tag, FT_SizeRec, FT_Size_Metrics, FT_UInt,
+    FT_ULong, FT_Vector, FT_STYLE_FLAG_ITALIC,
 };
 use freetype::succeeded;
 use freetype::tt_os2::TT_OS2;
 use log::debug;
+use parking_lot::ReentrantMutex;
 use style::computed_values::font_stretch::T as FontStretch;
 use style::computed_values::font_weight::T as FontWeight;
 use style::values::computed::font::FontStyle;
+use webrender_api::FontInstanceFlags;
 
 use super::library_handle::FreeTypeLibraryHandle;
 use crate::font::{
@@ -74,19 +76,26 @@ pub struct PlatformFont {
     /// The font data itself, which must stay valid for the lifetime of the
     /// platform [`FT_Face`].
     font_data: Arc<Vec<u8>>,
-    face: FT_Face,
+    face: ReentrantMutex<FT_Face>,
     can_do_fast_shaping: bool,
 }
 
+// FT_Face can be used in multiple threads, but from only one thread at a time.
+// It's protected with a ReentrantMutex for PlatformFont.
+// See https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_face.
+unsafe impl Sync for PlatformFont {}
+unsafe impl Send for PlatformFont {}
+
 impl Drop for PlatformFont {
     fn drop(&mut self) {
-        assert!(!self.face.is_null());
+        let face = self.face.lock();
+        assert!(!face.is_null());
         unsafe {
             // The FreeType documentation says that both `FT_New_Face` and `FT_Done_Face`
             // should be protected by a mutex.
             // See https://freetype.org/freetype2/docs/reference/ft2-library_setup.html.
             let _guard = FreeTypeLibraryHandle::get().lock();
-            if !succeeded(FT_Done_Face(self.face)) {
+            if !succeeded(FT_Done_Face(*face)) {
                 panic!("FT_Done_Face failed");
             }
         }
@@ -133,7 +142,7 @@ impl PlatformFontMethods for PlatformFont {
     ) -> Result<PlatformFont, &'static str> {
         let face = create_face(data.clone(), face_index, pt_size)?;
         let mut handle = PlatformFont {
-            face,
+            face: ReentrantMutex::new(face),
             font_data: data,
             can_do_fast_shaping: false,
         };
@@ -146,7 +155,8 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn descriptor(&self) -> FontTemplateDescriptor {
-        let style = if unsafe { (*self.face).style_flags & FT_STYLE_FLAG_ITALIC as c_long != 0 } {
+        let face = self.face.lock();
+        let style = if unsafe { (**face).style_flags & FT_STYLE_FLAG_ITALIC as c_long != 0 } {
             FontStyle::ITALIC
         } else {
             FontStyle::NORMAL
@@ -177,9 +187,11 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn glyph_index(&self, codepoint: char) -> Option<GlyphId> {
-        assert!(!self.face.is_null());
+        let face = self.face.lock();
+        assert!(!face.is_null());
+
         unsafe {
-            let idx = FT_Get_Char_Index(self.face, codepoint as FT_ULong);
+            let idx = FT_Get_Char_Index(*face, codepoint as FT_ULong);
             if idx != 0 as FT_UInt {
                 Some(idx as GlyphId)
             } else {
@@ -193,11 +205,13 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn glyph_h_kerning(&self, first_glyph: GlyphId, second_glyph: GlyphId) -> FractionalPixel {
-        assert!(!self.face.is_null());
+        let face = self.face.lock();
+        assert!(!face.is_null());
+
         let mut delta = FT_Vector { x: 0, y: 0 };
         unsafe {
             FT_Get_Kerning(
-                self.face,
+                *face,
                 first_glyph,
                 second_glyph,
                 FT_Kerning_Mode::FT_KERNING_DEFAULT as FT_UInt,
@@ -212,11 +226,13 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn glyph_h_advance(&self, glyph: GlyphId) -> Option<FractionalPixel> {
-        assert!(!self.face.is_null());
+        let face = self.face.lock();
+        assert!(!face.is_null());
+
         unsafe {
-            let res = FT_Load_Glyph(self.face, glyph as FT_UInt, GLYPH_LOAD_FLAGS);
+            let res = FT_Load_Glyph(*face, glyph as FT_UInt, GLYPH_LOAD_FLAGS);
             if succeeded(res) {
-                let void_glyph = (*self.face).glyph;
+                let void_glyph = (**face).glyph;
                 let slot: FT_GlyphSlot = void_glyph;
                 assert!(!slot.is_null());
                 let advance = (*slot).metrics.horiAdvance;
@@ -231,8 +247,8 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn metrics(&self) -> FontMetrics {
-        /* TODO(Issue #76): complete me */
-        let face = self.face_rec_mut();
+        let face = self.face.lock();
+        let face = unsafe { **face };
 
         let underline_size = self.font_units_to_au(face.underline_thickness as f64);
         let underline_offset = self.font_units_to_au(face.underline_position as f64);
@@ -260,10 +276,16 @@ impl PlatformFontMethods for PlatformFont {
             x_height = self.font_units_to_au(os2.sx_height as f64);
         }
 
-        let average_advance = self
+        let zero_horizontal_advance = self
             .glyph_index('0')
             .and_then(|idx| self.glyph_h_advance(idx))
-            .map_or(max_advance, |advance| self.font_units_to_au(advance));
+            .map(Au::from_f64_px);
+        let ic_horizontal_advance = self
+            .glyph_index('\u{6C34}')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+
+        let average_advance = zero_horizontal_advance.unwrap_or(max_advance);
 
         let metrics = FontMetrics {
             underline_size,
@@ -278,6 +300,8 @@ impl PlatformFontMethods for PlatformFont {
             max_advance,
             average_advance,
             line_gap: height,
+            zero_horizontal_advance,
+            ic_horizontal_advance,
         };
 
         debug!("Font metrics (@{}px): {:?}", em_size.to_f32_px(), metrics);
@@ -285,24 +309,19 @@ impl PlatformFontMethods for PlatformFont {
     }
 
     fn table_for_tag(&self, tag: FontTableTag) -> Option<FontTable> {
+        let face = self.face.lock();
         let tag = tag as FT_ULong;
 
         unsafe {
             // Get the length
             let mut len = 0;
-            if !succeeded(FT_Load_Sfnt_Table(
-                self.face,
-                tag,
-                0,
-                ptr::null_mut(),
-                &mut len,
-            )) {
+            if !succeeded(FT_Load_Sfnt_Table(*face, tag, 0, ptr::null_mut(), &mut len)) {
                 return None;
             }
             // Get the bytes
             let mut buf = vec![0u8; len as usize];
             if !succeeded(FT_Load_Sfnt_Table(
-                self.face,
+                *face,
                 tag,
                 0,
                 buf.as_mut_ptr(),
@@ -313,9 +332,13 @@ impl PlatformFontMethods for PlatformFont {
             Some(FontTable { buffer: buf })
         }
     }
+
+    fn webrender_font_instance_flags(&self) -> FontInstanceFlags {
+        FontInstanceFlags::empty()
+    }
 }
 
-impl<'a> PlatformFont {
+impl PlatformFont {
     fn set_char_size(face: FT_Face, pt_size: Au) -> Result<(), &'static str> {
         let char_size = pt_size.to_f64_px() * 64.0 + 0.5;
 
@@ -330,9 +353,10 @@ impl<'a> PlatformFont {
     }
 
     fn has_table(&self, tag: FontTableTag) -> bool {
+        let face = self.face.lock();
         unsafe {
             succeeded(FT_Load_Sfnt_Table(
-                self.face,
+                *face,
                 tag as FT_ULong,
                 0,
                 ptr::null_mut(),
@@ -341,13 +365,9 @@ impl<'a> PlatformFont {
         }
     }
 
-    #[allow(clippy::mut_from_ref)] // Intended for this function
-    fn face_rec_mut(&'a self) -> &'a mut FT_FaceRec {
-        unsafe { &mut (*self.face) }
-    }
-
     fn font_units_to_au(&self, value: f64) -> Au {
-        let face = self.face_rec_mut();
+        let face = self.face.lock();
+        let face = unsafe { **face };
 
         // face.size is a *c_void in the bindings, presumably to avoid
         // recursive structural types
@@ -364,9 +384,10 @@ impl<'a> PlatformFont {
     }
 
     fn os2_table(&self) -> Option<OS2Table> {
+        let face = self.face.lock();
+
         unsafe {
-            let os2 =
-                FT_Get_Sfnt_Table(self.face_rec_mut(), FT_Sfnt_Tag::FT_SFNT_OS2) as *mut TT_OS2;
+            let os2 = FT_Get_Sfnt_Table(*face, FT_Sfnt_Tag::FT_SFNT_OS2) as *mut TT_OS2;
             let valid = !os2.is_null() && (*os2).version != 0xffff;
 
             if !valid {

@@ -3,17 +3,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::borrow::ToOwned;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::{Deref, RangeInclusive};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::{f32, fmt, mem, thread};
 
 use app_units::Au;
+use atomic_refcell::AtomicRefCell;
 use gfx_traits::WebrenderApi;
 use ipc_channel::ipc::{self, IpcBytesSender, IpcReceiver, IpcSender};
 use log::{debug, trace};
+use malloc_size_of_derive::MallocSizeOf;
 use net_traits::request::{Destination, Referrer, RequestBuilder};
 use net_traits::{fetch_async, CoreResourceThread, FetchResponseMsg};
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ use style::stylesheets::{Stylesheet, StylesheetInDocument};
 use style::values::computed::font::{FixedPoint, FontStyleFixedPoint};
 use style::values::computed::{FontStretch, FontWeight};
 use style::values::specified::FontStretch as SpecifiedFontStretch;
-use webrender_api::{FontInstanceKey, FontKey};
+use webrender_api::{FontInstanceFlags, FontInstanceKey, FontKey};
 
 use crate::font::{FontDescriptor, FontFamilyDescriptor, FontFamilyName, FontSearchScope};
 use crate::font_context::FontSource;
@@ -47,7 +47,7 @@ pub struct FontTemplates {
     templates: Vec<FontTemplateRef>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize)]
 pub enum FontIdentifier {
     Local(LocalFontIdentifier),
     Web(ServoUrl),
@@ -109,7 +109,7 @@ impl FontTemplates {
         // If a request is made for a font family that exists,
         // pick the first valid font in the family if we failed
         // to find an exact match for the descriptor.
-        for template in &mut self.templates.iter() {
+        if let Some(template) = self.templates.first() {
             return vec![template.clone()];
         }
 
@@ -125,7 +125,8 @@ impl FontTemplates {
                 return;
             }
         }
-        self.templates.push(Rc::new(RefCell::new(new_template)));
+        self.templates
+            .push(Arc::new(AtomicRefCell::new(new_template)));
     }
 }
 
@@ -137,7 +138,12 @@ pub enum Command {
         FontFamilyDescriptor,
         IpcSender<Vec<SerializedFontTemplate>>,
     ),
-    GetFontInstance(FontIdentifier, Au, IpcSender<FontInstanceKey>),
+    GetFontInstance(
+        FontIdentifier,
+        Au,
+        FontInstanceFlags,
+        IpcSender<FontInstanceKey>,
+    ),
     AddWebFont(CSSFontFaceDescriptors, Vec<Source>, IpcSender<()>),
     AddDownloadedWebFont(CSSFontFaceDescriptors, ServoUrl, Vec<u8>, IpcSender<()>),
     Exit(IpcSender<()>),
@@ -226,11 +232,11 @@ impl FontCache {
                             .font_data
                             .entry(identifier)
                             .or_insert_with(|| font_template.data());
-                        let _ = bytes_sender.send(&data);
+                        let _ = bytes_sender.send(data);
                     }
                 },
-                Command::GetFontInstance(identifier, pt_size, result) => {
-                    let _ = result.send(self.get_font_instance(identifier, pt_size));
+                Command::GetFontInstance(identifier, pt_size, flags, result) => {
+                    let _ = result.send(self.get_font_instance(identifier, pt_size, flags));
                 },
                 Command::AddWebFont(css_font_face_descriptors, sources, result) => {
                     self.handle_add_web_font(css_font_face_descriptors, sources, result);
@@ -436,7 +442,12 @@ impl FontCache {
         self.find_templates_in_local_family(descriptor_to_match, &family_descriptor.name)
     }
 
-    fn get_font_instance(&mut self, identifier: FontIdentifier, pt_size: Au) -> FontInstanceKey {
+    fn get_font_instance(
+        &mut self,
+        identifier: FontIdentifier,
+        pt_size: Au,
+        flags: FontInstanceFlags,
+    ) -> FontInstanceKey {
         let webrender_api = &self.webrender_api;
         let webrender_fonts = &mut self.webrender_fonts;
         let font_data = self
@@ -465,7 +476,9 @@ impl FontCache {
         *self
             .font_instances
             .entry((font_key, pt_size))
-            .or_insert_with(|| webrender_api.add_font_instance(font_key, pt_size.to_f32_px()))
+            .or_insert_with(|| {
+                webrender_api.add_font_instance(font_key, pt_size.to_f32_px(), flags)
+            })
     }
 }
 
@@ -545,10 +558,7 @@ impl From<&FontFaceRuleData> for CSSFontFaceDescriptors {
                 ),
             }
         }
-        let style = rule_data
-            .style
-            .as_ref()
-            .map(|style| style_to_computed(style));
+        let style = rule_data.style.as_ref().map(style_to_computed);
         let unicode_range = rule_data
             .unicode_range
             .as_ref()
@@ -661,10 +671,20 @@ impl FontCacheThread {
 }
 
 impl FontSource for FontCacheThread {
-    fn get_font_instance(&mut self, identifier: FontIdentifier, size: Au) -> FontInstanceKey {
+    fn get_font_instance(
+        &mut self,
+        identifier: FontIdentifier,
+        size: Au,
+        flags: FontInstanceFlags,
+    ) -> FontInstanceKey {
         let (response_chan, response_port) = ipc::channel().expect("failed to create IPC channel");
         self.chan
-            .send(Command::GetFontInstance(identifier, size, response_chan))
+            .send(Command::GetFontInstance(
+                identifier,
+                size,
+                flags,
+                response_chan,
+            ))
             .expect("failed to send message to font cache thread");
 
         let instance_key = response_port.recv();
@@ -708,7 +728,7 @@ impl FontSource for FontCacheThread {
             .into_iter()
             .map(|serialized_font_template| {
                 let font_data = serialized_font_template.bytes_receiver.recv().ok();
-                Rc::new(RefCell::new(FontTemplate {
+                Arc::new(AtomicRefCell::new(FontTemplate {
                     identifier: serialized_font_template.identifier,
                     descriptor: serialized_font_template.descriptor.clone(),
                     data: font_data.map(Arc::new),

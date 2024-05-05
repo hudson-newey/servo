@@ -20,6 +20,7 @@ use style::computed_values::font_weight::T as StyleFontWeight;
 use style::values::computed::font::FontStyle as StyleFontStyle;
 use truetype::tables::WindowsMetrics;
 use truetype::value::Read;
+use webrender_api::FontInstanceFlags;
 
 use crate::font::{
     FontMetrics, FontTableMethods, FontTableTag, FractionalPixel, PlatformFontMethods,
@@ -80,6 +81,13 @@ pub struct PlatformFont {
     du_to_px: f32,
     scaled_du_to_px: f32,
 }
+
+// Based on information from the Skia codebase, it seems that DirectWrite APIs from
+// Windows 10 and beyond are thread safe.  If problems arise from this, we can protect the
+// platform font with a Mutex.
+// See https://source.chromium.org/chromium/chromium/src/+/main:third_party/skia/src/ports/SkScalerContext_win_dw.cpp;l=56;bpv=0;bpt=1.
+unsafe impl Sync for PlatformFont {}
+unsafe impl Send for PlatformFont {}
 
 struct Nondebug<T>(T);
 
@@ -231,6 +239,15 @@ impl PlatformFontMethods for PlatformFont {
         // is pulled out here for clarity
         let leading = dm.ascent - dm.capHeight;
 
+        let zero_horizontal_advance = self
+            .glyph_index('0')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+        let ic_horizontal_advance = self
+            .glyph_index('\u{6C34}')
+            .and_then(|idx| self.glyph_h_advance(idx))
+            .map(Au::from_f64_px);
+
         let metrics = FontMetrics {
             underline_size: au_from_du(dm.underlineThickness as i32),
             underline_offset: au_from_du_s(dm.underlinePosition as i32),
@@ -244,6 +261,8 @@ impl PlatformFontMethods for PlatformFont {
             max_advance: au_from_pt(0.0),     // FIXME
             average_advance: au_from_pt(0.0), // FIXME
             line_gap: au_from_du_s((dm.ascent + dm.descent + dm.lineGap as u16) as i32),
+            zero_horizontal_advance,
+            ic_horizontal_advance,
         };
         debug!("Font metrics (@{} pt): {:?}", self.em_size * 12., metrics);
         metrics
@@ -253,5 +272,9 @@ impl PlatformFontMethods for PlatformFont {
         self.face
             .get_font_table(tag)
             .map(|bytes| FontTable { data: bytes })
+    }
+
+    fn webrender_font_instance_flags(&self) -> FontInstanceFlags {
+        FontInstanceFlags::empty()
     }
 }
